@@ -1,0 +1,62 @@
+trigger:
+- dev
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # Update with your ACR and Container App details
+  ACR_NAME: 'armanm'
+  CONTAINER_APP_NAME: 'test-app-dev'
+  RESOURCE_GROUP: 'capgemini'
+  LOCATION: 'EAST US'
+  IMAGE_NAME: 'app-dev'
+  TAG: '$(Build.BuildId)'  # Update this based on your tagging strategy
+
+stages:
+- stage: BuildAndPush
+  displayName: "Build and Push Image"
+  jobs:
+  - job: BuildPushImage
+    displayName: "Build and Push Docker Image"
+    steps:
+
+    - task: AzureCLI@2
+      displayName: Build and Push
+      inputs:
+        azureSubscription: 'AzureDevops-ServiceConnection'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          docker login $ACR_NAME.azurecr.io --username "Armanm" --password $(az acr credential show --name armanm --query "passwords[0].value" --output tsv)
+          docker build -f Dockerfile -t $ACR_NAME.azurecr.io/$(IMAGE_NAME):$(Build.BuildId) .
+          docker push $ACR_NAME.azurecr.io/$(IMAGE_NAME):$(Build.BuildId)
+
+    - script: |
+        echo "Scanning image for vulnerabilities with Trivy..."
+        docker run --rm --init \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy image --exit-code 1 --severity HIGH,CRITICAL $ACR_NAME.azurecr.io/$(IMAGE_NAME):$(Build.BuildId
+      displayName: 'Scan Image Trivy'
+      continueOnError: true
+
+- stage: Deploy
+  displayName: "Deploy to Azure Container App"
+  dependsOn: BuildAndPush
+  jobs:
+  - job: DeployContainerApp
+    displayName: "Deploy to Container App"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Deploy to Azure Container App"
+      inputs:
+        azureSubscription: 'AzureDevops-ServiceConnection'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az containerapp update \
+            --name $(CONTAINER_APP_NAME) \
+            --resource-group $(RESOURCE_GROUP) \
+            --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(TAG)
+        addSpnToEnvironment: true
+        useGlobalConfig: true
